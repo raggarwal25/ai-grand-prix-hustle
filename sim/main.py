@@ -243,9 +243,12 @@ _race_pass_times: list = [-1.0] * race_course.MAX_GATES
 _SOLVER_MODULE_NAME = os.environ.get("RACE_SOLVER", "solver.baseline")
 print(f"[SOLVER] using module: {_SOLVER_MODULE_NAME}")
 _solver_module = importlib.import_module(_SOLVER_MODULE_NAME)
+
+from benchmark.hook import maybe_instrument
+_solver_module.autopilot = maybe_instrument(_solver_module.autopilot, solver_name=_SOLVER_MODULE_NAME, total_gates=len(ACTIVE_COURSE))
+
 _current_rc = [RCCommand()]      # most recent solver output, held between calls
 _latest_frame = [None]           # last RGBA frame returned by render_camera
-
 
 def sitl_post_step(tick: int, ctx: el.StepContext):
     """Lockstep post-step callback. See ARCHITECTURE.md ('Lockstep cycle')."""
