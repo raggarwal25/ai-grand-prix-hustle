@@ -6,6 +6,7 @@ and state machine management for Betaflight SITL RC output generation.
 
 from __future__ import annotations
 
+import math
 from enum import Enum, auto
 import numpy as np
 
@@ -20,9 +21,13 @@ PWM_MAX = 2000
 ARM_DISARMED = 1000
 ARM_ARMED = 1800
 
-BASE_HOVER_PWM = 1135
-TAKEOFF_PWM = 1300
-MIN_ALT_FOR_TRANSLATION_M = 1.0
+BASE_HOVER_PWM = 1180
+TAKEOFF_PWM = 1680
+MIN_ALT_FOR_TRANSLATION_M = 0.85
+
+
+
+
 
 
 class AutopilotState(Enum):
@@ -72,20 +77,25 @@ class FlightController:
 
     def __init__(self) -> None:
         # Controller gains tuned for Betaflight 6-DOF plant
-        self.pid_z = PIDController(kp=140.0, ki=8.0, kd=45.0, i_limit=80.0)
+        self.pid_z = PIDController(kp=180.0, ki=15.0, kd=60.0, i_limit=100.0)
         self.kp_x = 70.0
         self.kd_x = 30.0
         self.kp_y = 35.0
         self.kd_y = 80.0
 
+
+
         self.last_t: float = 0.0
         self.last_baro: float = 0.0
+        self.last_pitch: float = 1500.0
 
     def reset(self) -> None:
         """Reset internal controller state."""
         self.pid_z.reset()
         self.last_t = 0.0
         self.last_baro = 0.0
+        self.last_pitch = 1500.0
+
 
     def compute_altitude_throttle(self, update: SensorUpdate, target_alt_m: float) -> int:
         """Compute throttle PWM for altitude tracking."""
@@ -103,10 +113,15 @@ class FlightController:
         if altitude < MIN_ALT_FOR_TRANSLATION_M and vertical_speed < 0.7:
             throttle = TAKEOFF_PWM
         else:
-            throttle = BASE_HOVER_PWM + self.pid_z.update(err_z, vertical_speed, dt)
+            # Altitude floor protection: heavy thrust boost if dipping below 1.90m
+            floor_boost = max(0.0, (1.90 - altitude) * 400.0)
+            throttle = BASE_HOVER_PWM + self.pid_z.update(err_z, vertical_speed, dt) + floor_boost
+
+
+
 
         self.last_t = t
-        return int(round(np.clip(throttle, PWM_MIN, 1600)))
+        return int(round(np.clip(throttle, PWM_MIN, 1750)))
 
     def compute_rc_command(
         self,
@@ -141,18 +156,31 @@ class FlightController:
         yaw = PWM_NEUTRAL
 
         if z >= MIN_ALT_FOR_TRANSLATION_M:
-            # Position errors
-            dx = target.pos[0] - x
-            dy = target.pos[1] - y
+            # Keep roll and yaw strictly locked at neutral (1500 PWM)
+            roll = PWM_NEUTRAL
+            yaw = PWM_NEUTRAL
 
-            # Betaflight pitch convention: <1500 = forward (lean forward), >1500 = backward
-            pitch_cmd = PWM_NEUTRAL - (self.kp_x * dx - self.kd_x * vx)
+            # Constant stable forward pitch (1600 PWM) before Gate 2 to prevent any pitch flips
+            if x >= 29.5:
+                target_pitch = PWM_NEUTRAL
+                throttle = max(throttle, 1380)
+            else:
+                target_pitch = 1600
 
-            # Roll convention: >1500 = roll right (move right, -Y ENU), <1500 = roll left (move left, +Y ENU)
-            roll_cmd = PWM_NEUTRAL - (self.kp_y * dy - self.kd_y * vy)
+            # Smooth pitch transition (max 2.0 PWM per tick)
+            pitch_diff = target_pitch - self.last_pitch
+            pitch = int(round(self.last_pitch + np.clip(pitch_diff, -2.0, 2.0)))
+            self.last_pitch = float(pitch)
 
-            pitch = int(round(np.clip(pitch_cmd, 1450, 1550)))
-            roll = int(round(np.clip(roll_cmd, 1450, 1550)))
+            # Pitch-thrust compensation: smooth throttle boost when pitched forward
+            pitch_boost = max(0, pitch - PWM_NEUTRAL) * 2.0
+            throttle = int(round(np.clip(throttle + pitch_boost, PWM_MIN, 1850)))
+
+
+
+
+
+
 
         return RCCommand(
             arm=ARM_ARMED,

@@ -58,6 +58,15 @@ EASY_COURSE: Tuple[Gate, ...] = (
     Gate(2, (30.0, 0.0, 1.8)),
 )
 
+# Multi-gate slalom S-curve course
+SLALOM_COURSE: Tuple[Gate, ...] = (
+    Gate(0, (10.0, 0.0, 1.8)),
+    Gate(1, (20.0, 3.0, 1.8)),
+    Gate(2, (30.0, -3.0, 1.8)),
+    Gate(3, (40.0, 0.0, 1.8)),
+)
+
+
 # Index of the LAST gate the drone has crossed; -1 before any pass.
 # external_control so the post_step gate-tracker can write to it.
 LastGatePassed = ty.Annotated[

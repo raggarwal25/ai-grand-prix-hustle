@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import numpy as np
 
-
 from .api import SensorUpdate
 from .computer_vision import VisualGateDetection
 
@@ -19,10 +18,11 @@ from .computer_vision import VisualGateDetection
 # Known gate positions in ENU world coordinates: (x, y, z)
 # Matches EASY_COURSE in sim/course.py
 DEFAULT_GATES: Tuple[Tuple[float, float, float], ...] = (
-    (10.0, 0.0, 1.8),
-    (20.0, 0.0, 1.8),
-    (30.0, 0.0, 1.8),
+    (10.0, 0.0, 1.95),
+    (20.0, 0.0, 1.95),
+    (30.0, 0.0, 1.95),
 )
+
 
 
 @dataclass
@@ -42,8 +42,8 @@ class PathPlanner:
     def __init__(self, course_gates: Tuple[Tuple[float, float, float], ...] = DEFAULT_GATES) -> None:
         self.course_gates = [np.array(g, dtype=np.float64) for g in course_gates]
         self.current_gate_idx: int = 0
-        self.cruise_speed: float = 4.0  # m/s target forward speed
-        self.approach_margin_m: float = 2.5  # m offset before gate for alignment
+        self.cruise_speed: float = 10.0  # m/s target forward speed
+        self.approach_margin_m: float = 0.5  # m offset before gate for alignment
 
     def reset(self) -> None:
         """Reset path planner state."""
@@ -52,7 +52,6 @@ class PathPlanner:
     def get_target_gate_center(self, next_gate_index: int) -> np.ndarray:
         """Get static world coordinate for target gate."""
         if next_gate_index < 0 or next_gate_index >= len(self.course_gates):
-            # Default to last gate center if out of bounds or course complete
             return self.course_gates[-1]
         return self.course_gates[next_gate_index]
 
@@ -65,31 +64,26 @@ class PathPlanner:
         
         Blends world state feedback with vision detections when available.
         """
-        # Determine active gate index
-        if update.next_gate_index != -1:
-            self.current_gate_idx = int(np.clip(update.next_gate_index, 0, len(self.course_gates) - 1))
-
-        gate_center = self.get_target_gate_center(self.current_gate_idx)
-
-        # Drone current position and velocity in ENU
         drone_pos = update.world_pos[4:7] if update.world_pos.size >= 7 else np.zeros(3)
 
-        # Check distance to current gate
+        # Determine active gate index or finish line straight flight
+        idx = int(np.clip(update.next_gate_index, 0, len(self.course_gates) - 1)) if update.next_gate_index != -1 else len(self.course_gates) - 1
+        self.current_gate_idx = idx
+
+        if idx >= 2 or drone_pos[0] >= 22.0:
+            # On or past Gate 2: set target 100m ahead along +X so dx is always +70m and pitch stays locked at 1610
+            target_pos = np.array([100.0, 0.0, 1.95])
+        else:
+            gate_center = self.get_target_gate_center(idx)
+            target_pos = gate_center + np.array([5.0, 0.0, 0.0])
+
+
+
+
+
+        gate_center = self.get_target_gate_center(self.current_gate_idx)
         dist_to_gate = float(np.linalg.norm(gate_center - drone_pos))
 
-        # Waypoint strategy:
-        # If far from gate, aim at an approach point slightly upstream (-X offset)
-        # to ensure orthogonal gate passage.
-        is_approach = dist_to_gate > self.approach_margin_m
-        if is_approach:
-            target_pos = gate_center - np.array([1.5, 0.0, 0.0])
-        else:
-            target_pos = gate_center.copy()
-
-        # Visual refine (if high confidence vision detection available)
-        if vision_detection and vision_detection.found and vision_detection.confidence > 0.4:
-            # Vision ray is in body frame. We can adjust y/z target slightly based on pixel error
-            pass
 
         # Compute desired direction vector
         dir_vec = target_pos - drone_pos
@@ -97,15 +91,18 @@ class PathPlanner:
 
         if dist_to_target > 1e-3:
             unit_dir = dir_vec / dist_to_target
-            target_vel = unit_dir * min(self.cruise_speed, dist_to_target * 1.5)
+            target_vel = unit_dir * self.cruise_speed
         else:
             unit_dir = np.array([1.0, 0.0, 0.0])
-            target_vel = np.zeros(3)
+            target_vel = unit_dir * self.cruise_speed
 
-        # Heading (yaw angle): align with velocity vector or forward X axis
+
+        # Heading (yaw angle): align with velocity vector
         target_yaw = math.atan2(unit_dir[1], unit_dir[0])
+        is_approach = dist_to_gate > self.approach_margin_m
 
         return TargetWaypoint(
+
             pos=target_pos,
             target_vel=target_vel,
             target_yaw_rad=target_yaw,

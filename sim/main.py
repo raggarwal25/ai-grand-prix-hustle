@@ -321,12 +321,13 @@ def sitl_post_step(tick: int, ctx: el.StepContext):
                 "drone.world_vel",
             ]
         )
-        accel = np.array(sensor_data["drone.accel"])
-        gyro = np.array(sensor_data["drone.gyro"])
-        baro = np.array(sensor_data["drone.baro"])
-        mag = np.array(sensor_data["drone.mag"])
-        world_pos = np.array(sensor_data["drone.world_pos"])
-        world_vel = np.array(sensor_data["drone.world_vel"])
+        accel = np.asarray(sensor_data["drone.accel"])
+        gyro = np.asarray(sensor_data["drone.gyro"])
+        baro = np.asarray(sensor_data["drone.baro"])
+        mag = np.asarray(sensor_data["drone.mag"])
+        world_pos = np.asarray(sensor_data["drone.world_pos"])
+        world_vel = np.asarray(sensor_data["drone.world_vel"])
+
 
         # Update sensor buffer with real physics data
         buf.update(
@@ -404,21 +405,22 @@ def sitl_post_step(tick: int, ctx: el.StepContext):
     solver_update = SensorUpdate(
         t=t,
         tick=tick,
-        world_pos=np.asarray(world_pos),
-        world_vel=np.asarray(world_vel),
-        gyro=np.asarray(gyro),
-        accel=np.asarray(accel),
+        world_pos=world_pos,
+        world_vel=world_vel,
+        gyro=gyro,
+        accel=accel,
         gyro_fresh=(tick % config.gyro_tick_interval == 0),
         accel_fresh=(tick % config.accel_tick_interval == 0),
         baro=float(baro[0]) if baro.size else 0.0,
         baro_fresh=(tick % config.baro_tick_interval == 0),
-        mag=np.asarray(mag),
+        mag=mag,
         mag_fresh=(tick % config.mag_tick_interval == 0),
         frame_rgba=_latest_frame[0],
         frame_fresh=(_latest_frame_tick[0] > _last_consumed_frame_tick[0]),
         last_gate_passed=_race_last_gate[0],
         next_gate_index=next_gate_index,
     )
+
     try:
         rc_out = _solver_module.autopilot(solver_update)
         if isinstance(rc_out, RCCommand):
@@ -469,14 +471,14 @@ def sitl_post_step(tick: int, ctx: el.StepContext):
         elapsed = time.time() - start_time[0]
         rate = t / elapsed if elapsed > 0 else 0
 
-        # Get current position for debug output
+        # Reuse world_pos and world_vel directly without IPC read_component calls
         try:
-            pos = np.array(ctx.read_component("drone.world_pos"))
-            x_pos = pos[4] if len(pos) > 6 else 0.0
-            y_pos = pos[5] if len(pos) > 6 else 0.0
-            z_pos = pos[6] if len(pos) > 6 else pos[2]
-            vel = np.array(ctx.read_component("drone.world_vel"))
-            z_vel = vel[5] if len(vel) > 5 else vel[2]
+            wp = np.asarray(world_pos)
+            wv = np.asarray(world_vel)
+            x_pos = wp[4] if len(wp) > 6 else 0.0
+            y_pos = wp[5] if len(wp) > 6 else 0.0
+            z_pos = wp[6] if len(wp) > 6 else wp[2]
+            z_vel = wv[5] if len(wv) > 5 else wv[2]
             pos_str = f"pos=({x_pos:+5.2f},{y_pos:+5.2f},{z_pos:+5.2f})m vz={z_vel:+.2f}m/s"
         except Exception:
             pos_str = "pos=?,?,?"
@@ -486,6 +488,7 @@ def sitl_post_step(tick: int, ctx: el.StepContext):
             f"motors=[{s.motors[0]:.3f},{s.motors[1]:.3f},{s.motors[2]:.3f},{s.motors[3]:.3f}] | "
             f"{pos_str} | {rate:.1f}x realtime"
         )
+
         last_print[0] = t
 
     # Check if simulation is complete - print summary and exit
@@ -565,13 +568,14 @@ print(f"Writing database to: {db_filename}")
 world.run(
     system,
     simulation_rate=config.pid_rate,
-    generate_real_time=True,
+    generate_real_time=False,
     post_step=sitl_post_step,
     db_path=db_filename,
     start_timestamp=0,
     max_ticks=MAX_TICKS,
     interactive=True,
 )
+
 
 if not bridge[0]:
     print("\nNo simulation ticks executed.")
