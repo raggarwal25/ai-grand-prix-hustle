@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-
+benchmark_results/
 eeprom.bin.bak
 
 # Elodin run artifacts
